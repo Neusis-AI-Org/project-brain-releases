@@ -1,0 +1,242 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: brain
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: projectbrain
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U brain -d projectbrain']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    # Resource caps. Using top-level mem_limit/cpus so they apply under plain
+    # `docker compose up` (deploy.resources is swarm-only in non-swarm mode).
+    mem_limit: 1536m
+    mem_reservation: 512m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  migrate:
+    image: ${IMAGE_REGISTRY:-local}/project-brain-migrate:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile
+      target: migrate
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    environment:
+      DATABASE_URL: postgres://brain:${POSTGRES_PASSWORD:-changeme}@postgres:5432/projectbrain
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    image: ${IMAGE_REGISTRY:-local}/project-brain-web:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile
+      target: web
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://brain:${POSTGRES_PASSWORD:-changeme}@postgres:5432/projectbrain
+      REDIS_URL: redis://redis:6379
+      SCHEDULER_ENABLED: 'false'
+      # Request-scoped service — needs headroom for concurrent requests.
+      PG_POOL_MAX: ${PG_POOL_MAX_WEB:-25}
+    ports:
+      # Bind to loopback only — Caddy reaches web over the compose network in
+      # prod, and local dev hits localhost:3000 directly. The dev overlay
+      # keeps this; prod customers should never expose 3000 publicly.
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      # Use 127.0.0.1 explicitly: BusyBox wget on alpine resolves `localhost`
+      # to ::1 (IPv6) but Next's standalone server binds only to IPv4 0.0.0.0.
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/api/health']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  worker:
+    image: ${IMAGE_REGISTRY:-local}/project-brain-worker:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://brain:${POSTGRES_PASSWORD:-changeme}@postgres:5432/projectbrain
+      REDIS_URL: redis://redis:6379
+      SCHEDULER_ENABLED: 'true'
+      # Long-lived BullMQ consumers issue mostly serial queries per job.
+      PG_POOL_MAX: ${PG_POOL_MAX_WORKER:-5}
+      GRAPHIFY_WORKSPACE_DIR: /workspace
+      GRAPHIFY_SIDECAR_URL: http://graphify-sidecar:8080
+      # Required at worker startup (apps/worker/src/index.ts enforces). NOT
+      # enforced here via ${VAR:?} because compose evaluates that at parse
+      # time, which would break `docker compose config` and `docker compose
+      # up postgres` for operators who only want unrelated services. install.sh
+      # generates the token; pbtest-redeploy.sh rotates it per redeploy.
+      GRAPHIFY_SIDECAR_TOKEN: ${GRAPHIFY_SIDECAR_TOKEN:-}
+    volumes:
+      - graphify_workspace:/workspace
+    networks:
+      - default
+      - graphify_internal
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+      graphify-sidecar: { condition: service_healthy }
+    # Real liveness probe: open a TCP socket to redis:6379, send a RESP PING,
+    # require +PONG back. The worker is a BullMQ consumer — if it can't talk
+    # to Redis, it's a dead box. node:alpine has no curl/redis-cli, so we use
+    # the built-in `net` module (no extra deps, no Dockerfile churn).
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          const net=require('net');const s=net.connect(6379,'redis');let b='';s.setTimeout(3000,()=>{s.destroy();process.exit(1)});s.on('connect',()=>s.write('*1\r\n$4\r\nPING\r\n'));s.on('data',d=>{b+=d.toString();if(b.startsWith('+PONG')){s.end();process.exit(0)}});s.on('error',()=>process.exit(1));s.on('close',()=>{if(!b.startsWith('+PONG'))process.exit(1)});
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    mem_limit: 1536m
+    mem_reservation: 512m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  graphify-sidecar:
+    # Locked-down Graphify runtime. The worker prepares the repo checkout and
+    # sends only a workspace path + model settings; this service never receives
+    # GitHub credentials and is only attached to the internal graphify network.
+    image: ${IMAGE_REGISTRY:-local}/project-brain-graphify-sidecar:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/graphify-sidecar/Dockerfile
+    environment:
+      # Required — see comment under worker.environment. If unset, the
+      # sidecar's own bootstrap rejects every request (fail-closed inside the
+      # container) and the worker refuses to start at all.
+      GRAPHIFY_SIDECAR_TOKEN: ${GRAPHIFY_SIDECAR_TOKEN:-}
+      GRAPHIFY_WORKSPACE_ROOT: /workspace
+      HTTP_PROXY: ${GRAPHIFY_EGRESS_PROXY:-http://graphify-egress-proxy:3128}
+      HTTPS_PROXY: ${GRAPHIFY_EGRESS_PROXY:-http://graphify-egress-proxy:3128}
+      NO_PROXY: localhost,127.0.0.1,::1
+    volumes:
+      - graphify_workspace:/workspace
+    tmpfs:
+      - /tmp
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - graphify_internal
+    depends_on:
+      graphify-egress-proxy: { condition: service_started }
+    healthcheck:
+      test: ['CMD', 'python', '-c', 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen("http://localhost:8080/health",timeout=3).status==200 else 1)']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  graphify-egress-proxy:
+    # The sidecar's only route to LLM APIs. Operators should set
+    # GRAPHIFY_EGRESS_ALLOWED_HOSTS to their enterprise LLM gateway host(s).
+    image: ${IMAGE_REGISTRY:-local}/project-brain-graphify-egress-proxy:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/graphify-egress-proxy/Dockerfile
+    environment:
+      GRAPHIFY_EGRESS_ALLOWED_HOSTS: ${GRAPHIFY_EGRESS_ALLOWED_HOSTS:-generativelanguage.googleapis.com,api.openai.com,api.anthropic.com}
+    networks:
+      - default
+      - graphify_internal
+    restart: unless-stopped
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+volumes:
+  postgres_data:
+  redis_data:
+  graphify_workspace:
+
+networks:
+  graphify_internal:
+    internal: true

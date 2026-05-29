@@ -1,0 +1,44 @@
+# Production reverse proxy for Project Brain.
+#
+# Default: Caddy auto-issues and renews a Let's Encrypt cert for {$APP_DOMAIN}
+# on first start. HTTP→HTTPS redirect, HTTP/2, and HTTP/3 are on by default.
+#
+# Set APP_DOMAIN and ACME_EMAIL in .env (the prod overlay reads them).
+#
+# Custom certs (enterprise PKI / internal CA): set TLS_DIRECTIVE in .env to
+#   tls /certs/fullchain.pem /certs/privkey.pem
+# and bind-mount your cert files at ./certs. When TLS_DIRECTIVE is empty
+# (the default), Caddy falls back to its built-in ACME flow. See docs/INSTALL.md.
+
+{
+    email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+    {$TLS_DIRECTIVE}
+
+    encode zstd gzip
+
+    # Reasonable client body cap (keep in sync with anything the worker or
+    # web app accepts on file-upload routes).
+    request_body {
+        max_size 25MB
+    }
+
+    # Strict transport security — Caddy issues real certs, so HSTS is safe.
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Don't leak the upstream — Caddy strips Server by default.
+        -Server
+    }
+
+    reverse_proxy web:3000 {
+        # Pass real client IP through to Next.js. Auth.js and any rate
+        # limits read these.
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
