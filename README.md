@@ -39,5 +39,3 @@ ghcr.io/neusis-ai-org/project-brain-migrate
 ghcr.io/neusis-ai-org/project-brain-graphify-sidecar
 ghcr.io/neusis-ai-org/project-brain-graphify-egress-proxy
 ```
-
-Stable releases update `latest`. Version tags are immutable.

@@ -1,12 +1,12 @@
 Project Brain public release assets
 
-Version: bootstrap
+Version: v0.0.1-test.26
 Images:
-  ghcr.io/neusis-ai-org/project-brain-web:latest
-  ghcr.io/neusis-ai-org/project-brain-worker:latest
-  ghcr.io/neusis-ai-org/project-brain-migrate:latest
-  ghcr.io/neusis-ai-org/project-brain-graphify-sidecar:latest
-  ghcr.io/neusis-ai-org/project-brain-graphify-egress-proxy:latest
+  ghcr.io/neusis-ai-org/project-brain-web:v0.0.1-test.26
+  ghcr.io/neusis-ai-org/project-brain-worker:v0.0.1-test.26
+  ghcr.io/neusis-ai-org/project-brain-migrate:v0.0.1-test.26
+  ghcr.io/neusis-ai-org/project-brain-graphify-sidecar:v0.0.1-test.26
+  ghcr.io/neusis-ai-org/project-brain-graphify-egress-proxy:v0.0.1-test.26
 
 The source repository is private. This public repository contains only
 installer assets and operator documentation.
