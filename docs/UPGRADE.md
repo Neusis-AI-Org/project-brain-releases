@@ -99,7 +99,7 @@ Project Brain does not auto-pull new images.
 
 Use one of these notify-only options:
 
-- Watch releases at <https://github.com/Neusis-AI-Org/project-brain-releases/releases>.
+- Watch [project-brain-releases](https://github.com/Neusis-AI-Org/project-brain-releases/releases).
 - Run [Diun](https://crazymax.dev/diun/) alongside the stack.
 
 Do not allow an auto-pull tool to run migrations against a live database.
