@@ -26,7 +26,7 @@ version such as `v1.4.2`.
 ```
 
 See `docs/INSTALL.md`, `docs/UPGRADE.md`, and `docs/BACKUP.md` for operator
-instructions.
+instructions, including air-gapped install bundles.
 
 ## Images
 
