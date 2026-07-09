@@ -102,6 +102,50 @@ To configure Microsoft Entra ID:
    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d web
    ```
 
+## Configure the LLM provider
+
+Project Brain uses an LLM for two independent workloads: the **assistant chat** (in-app Q&A grounded on the knowledge graph) and the **graph builder** (the graphify sidecar that extracts the knowledge graph). Each is configured separately, through two surfaces.
+
+### Bootstrap with environment variables
+
+The installer writes a starting provider and key to `.env`:
+
+```env
+LLM_PROVIDER=google            # google | anthropic | openai
+LLM_MODEL=gemini-3-flash-preview
+GOOGLE_GENERATIVE_AI_API_KEY=...
+# Optional custom / compatible endpoints:
+LLM_BASE_URL=                  # applies to both workloads
+GRAPH_BUILDER_BASE_URL=        # graph builder only (e.g. an internal LLM gateway)
+```
+
+Until a workload is configured in the admin UI, **both workloads run entirely from these env vars**. `GRAPH_BUILDER_BASE_URL` overrides `LLM_BASE_URL` for the graph builder only, so graphify's egress can be pinned to an internal proxy without changing the assistant chat endpoint.
+
+### Override per workload in the admin UI
+
+A super-admin can override the provider, model, endpoint, and key per workload on the **LLM Settings** page (super-admin only):
+
+```text
+/admin/ai
+```
+
+For each of `assistant_chat` and `graph_builder` you can set:
+
+- **Provider** — `google`, `anthropic`, or `openai`
+- **Model** — the model id for that provider
+- **Endpoint base URL** (optional) — for Azure OpenAI, LiteLLM, a private gateway, or any OpenAI/Anthropic/Google-compatible endpoint
+- **API key** — per provider, stored AES-256-GCM encrypted on `platform_ai_credentials` (see [Security model](security.md))
+
+Precedence once a workload is saved:
+
+- **Provider and model** come from the saved row — `LLM_PROVIDER` / `LLM_MODEL` no longer apply to that workload.
+- **Base URL** falls back to the matching env value only when left blank in the form.
+- **API keys** are stored per provider (shared across workloads): a blank key field leaves any saved key in place, and the env key is used only when no key has ever been saved for that provider.
+
+:::warning
+If you point the **graph builder** at a custom base URL (env or admin UI), its hostname must also be in `GRAPHIFY_EGRESS_ALLOWED_HOSTS` or the egress proxy blocks the call. See [Graphify sidecar egress](#graphify-sidecar-egress).
+:::
+
 ## Connect integrations
 
 Super-admins manage integrations at:
@@ -131,12 +175,15 @@ Project Brain registers its GitHub App through GitHub's manifest flow — you do
 
 The manifest declares:
 
-| Permission     | Level          |
-| -------------- | -------------- |
-| Contents       | Read and write |
-| Metadata       | Read-only      |
-| Administration | Read and write |
-| Issues         | Read-only      |
+| Permission | Level          |
+| ---------- | -------------- |
+| Contents   | Read and write |
+| Metadata   | Read-only      |
+| Issues     | Read-only      |
+
+Project Brain deliberately does **not** request the `Administration` permission. It never creates or deletes repositories — that stays under your own org's repo-provisioning governance. You create the repo on GitHub yourself, install the App on it, and then connect it from the in-app **New project** flow (which only needs `Contents` to commit into the existing repo). Deleting a project in Project Brain removes only its database rows; the GitHub repo is always left intact.
+
+> Each repo you connect must have a `main` branch with at least one commit — the simplest way is to tick **Add a README** when creating it on GitHub. Project Brain commits to `main` and can no longer auto-initialize an empty repo.
 
 **Switching org / re-registering**
 
@@ -300,6 +347,39 @@ docker compose exec graphify-sidecar python -c "import urllib.request; urllib.re
 
 docker compose exec graphify-sidecar python -c "import os,urllib.request; proxy=os.environ['HTTPS_PROXY']; print(proxy)"
 ```
+
+## Knowledge graph builds
+
+After every accepted change to a project's repo — and on a manual or scheduled rebuild — the worker hands the workspace to `graphify-sidecar`, which runs `graphify extract` to (re)build the knowledge graph.
+
+`graphify extract` is **incremental**: it keeps a SHA-256 content-hash cache in `graphify-out/cache/`, so unchanged files cost no LLM calls. Changed files are re-extracted at LLM cost, so **every commit can trigger paid LLM usage** for the files it touches. Two best-effort post-steps then regenerate the human- and assistant-facing artifacts:
+
+| Artifact                                       | Produced by             | Purpose                                          |
+| ---------------------------------------------- | ----------------------- | ------------------------------------------------ |
+| `graphify-out/graph.json`                      | `graphify extract`      | The extracted knowledge graph (nodes + edges)    |
+| `graphify-out/GRAPH_REPORT.md`, `graph.html`   | `graphify cluster-only` | Human-readable community report + interactive view |
+| `graphify-out/wiki/` (entry `wiki/index.md`)   | `graphify export wiki`  | The assistant's primary grounding source         |
+
+The post-steps are budget-gated and skipped if extraction already used its time budget; older builds may have only `GRAPH_REPORT.md` and no `wiki/`.
+
+Tuning knobs are read by the sidecar from its own service environment (set them on the `graphify-sidecar` service):
+
+```env
+GRAPHIFY_TIMEOUT_S=1800              # overall extraction budget (default 30 min)
+GRAPHIFY_CLUSTER_ONLY_TIMEOUT_S=180  # GRAPH_REPORT.md + graph.html regeneration
+GRAPHIFY_WIKI_TIMEOUT_S=120          # wiki export
+GRAPHIFY_MAX_OUTPUT_TOKENS=32768     # per-call output token cap
+```
+
+### Forcing a full rebuild
+
+The graph rebuilds incrementally by default. If the cache becomes stale or corrupt, force a full rebuild from the project UI: **hold Shift while clicking the Rebuild button**. This wipes `graphify-out/cache/` and re-extracts every file from scratch — at full LLM cost — so use it only for recovery, not routinely. The equivalent API call is:
+
+```text
+POST /api/projects/<slug>/graph/rebuild?force=full
+```
+
+A forced rebuild only clears the extraction cache; the existing `graph.json` and `GRAPH_REPORT.md` stay in place until the new build overwrites them.
 
 ## Next steps
 
