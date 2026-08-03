@@ -75,6 +75,11 @@ else
   echo "IMAGE_TAG=$NEW_TAG" >> .env
 fi
 
+# Values sourced from .env are exported and take precedence over the updated
+# file during this process. Keep Compose on the newly pinned tag immediately;
+# otherwise the first upgrade attempt still pulls the previous release.
+export IMAGE_TAG="$NEW_TAG"
+
 # Cosign verification (optional). Verifies the four published images against
 # the GitHub Actions OIDC issuer. Only runs if COSIGN_VERIFY=true and cosign
 # is installed — otherwise warn and continue.
