@@ -96,11 +96,82 @@ To configure Microsoft Entra ID:
    AUTH_ALLOWED_EMAIL_DOMAINS=acme.com
    ```
 
+   `AUTH_AZURE_AD_TENANT_ID` may be a directory (tenant) ID, or `common` to
+   accept any Microsoft account (work, school, or personal). `common` requires
+   the app registration's _Supported account types_ to be multi-tenant —
+   otherwise sign-in fails with `AADSTS50194`.
+
+   Two allow-lists gate who may sign in, and a user passes if they match
+   **either**:
+
+   | Variable                     | Matches                                 |
+   | ---------------------------- | --------------------------------------- |
+   | `AUTH_ALLOWED_EMAIL_DOMAINS` | whole domains, e.g. `acme.com`          |
+   | `AUTH_ALLOWED_EMAILS`        | exact addresses, e.g. `alice@gmail.com` |
+
+   Use `AUTH_ALLOWED_EMAILS` to admit named individuals on consumer domains
+   without opening all of `gmail.com`:
+
+   ```env
+   AUTH_ALLOWED_EMAIL_DOMAINS=
+   AUTH_ALLOWED_EMAILS=alice@gmail.com,bob@outlook.com
+   ```
+
+   Leaving **both** empty accepts any email the IdP admits. With a
+   single-tenant app that is just your own directory; with `common` it is
+   every Microsoft account on the internet.
+
 5. Restart the web service:
 
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d web
    ```
+
+## Configure Google sign-in (optional)
+
+For users who have no account in your Entra tenant — contractors, pilot users,
+anyone on `gmail.com`. Entra cannot authenticate them, so they need their own
+provider.
+
+1. In the Google Cloud console, create an **OAuth 2.0 Client ID** of type _Web
+   application_.
+2. Add this authorised redirect URI:
+
+   ```text
+   https://<your-domain>/api/auth/callback/google
+   ```
+
+3. Update `.env`:
+
+   ```env
+   AUTH_GOOGLE_CLIENT_ID=...
+   AUTH_GOOGLE_CLIENT_SECRET=...
+   ```
+
+4. Recreate the web service (a restart will not re-read `.env`):
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --no-deps web worker
+   ```
+
+> **An allow-list is required.** Entra can be scoped to a single tenant;
+> Google has no equivalent, so enabling this provider means Google will
+> authenticate _any_ Google account on the internet. `AUTH_ALLOWED_EMAILS` /
+> `AUTH_ALLOWED_EMAIL_DOMAINS` are the only thing standing between a stranger
+> and a user record.
+>
+> Because of that, Google credentials **on their own do nothing**: with both
+> allow-lists empty the provider refuses to load, logs an error explaining
+> why, and the button stays hidden. Set an allow-list and it appears. This is
+> deliberate — it removes any window in which a half-finished configuration is
+> open to the internet.
+>
+> And because the two lists are OR'd, adding Google alongside Entra means you
+> must list your own domain in `AUTH_ALLOWED_EMAIL_DOMAINS` — otherwise an
+> addresses-only list locks out your whole staff.
+
+Leaving both credential variables empty is also safe: the provider is never
+constructed and the button is not rendered.
 
 ## Configure the LLM provider
 
@@ -354,11 +425,11 @@ After every accepted change to a project's repo — and on a manual or scheduled
 
 `graphify extract` is **incremental**: it keeps a SHA-256 content-hash cache in `graphify-out/cache/`, so unchanged files cost no LLM calls. Changed files are re-extracted at LLM cost, so **every commit can trigger paid LLM usage** for the files it touches. Two best-effort post-steps then regenerate the human- and assistant-facing artifacts:
 
-| Artifact                                       | Produced by             | Purpose                                          |
-| ---------------------------------------------- | ----------------------- | ------------------------------------------------ |
-| `graphify-out/graph.json`                      | `graphify extract`      | The extracted knowledge graph (nodes + edges)    |
-| `graphify-out/GRAPH_REPORT.md`, `graph.html`   | `graphify cluster-only` | Human-readable community report + interactive view |
-| `graphify-out/wiki/` (entry `wiki/index.md`)   | `graphify export wiki`  | The assistant's primary grounding source         |
+| Artifact                                     | Produced by             | Purpose                                            |
+| -------------------------------------------- | ----------------------- | -------------------------------------------------- |
+| `graphify-out/graph.json`                    | `graphify extract`      | The extracted knowledge graph (nodes + edges)      |
+| `graphify-out/GRAPH_REPORT.md`, `graph.html` | `graphify cluster-only` | Human-readable community report + interactive view |
+| `graphify-out/wiki/` (entry `wiki/index.md`) | `graphify export wiki`  | The assistant's primary grounding source           |
 
 The post-steps are budget-gated and skipped if extraction already used its time budget; older builds may have only `GRAPH_REPORT.md` and no `wiki/`.
 

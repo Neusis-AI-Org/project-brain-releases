@@ -137,6 +137,7 @@ REDIS_URL=redis://redis:6379
 AUTH_SECRET=$AUTH_SECRET
 AUTH_URL=$APP_URL
 AUTH_ALLOWED_EMAIL_DOMAINS=
+AUTH_ALLOWED_EMAILS=
 INITIAL_SUPER_ADMIN_EMAIL=$SUPER_ADMIN_EMAIL
 
 # Microsoft Entra ID (Azure AD). Configure in the Azure portal, then fill
@@ -145,6 +146,14 @@ INITIAL_SUPER_ADMIN_EMAIL=$SUPER_ADMIN_EMAIL
 AUTH_AZURE_AD_TENANT_ID=
 AUTH_AZURE_AD_CLIENT_ID=
 AUTH_AZURE_AD_CLIENT_SECRET=
+
+# Google OIDC, for users with no account in your Entra tenant. Both empty =
+# the Google button is hidden. Google has no tenant scope, so it authenticates
+# every Google account — an allow-list above is REQUIRED, and without one
+# these credentials are ignored and the provider refuses to load.
+# Redirect URI to register: $APP_URL/api/auth/callback/google
+AUTH_GOOGLE_CLIENT_ID=
+AUTH_GOOGLE_CLIENT_SECRET=
 
 DEV_AUTH_ENABLED=false
 
