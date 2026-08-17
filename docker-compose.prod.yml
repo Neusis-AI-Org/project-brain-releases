@@ -39,6 +39,10 @@ services:
       # Set in .env to e.g. `tls /certs/fullchain.pem /certs/privkey.pem` for
       # customer-provided certs (enterprise PKI / internal CA).
       TLS_DIRECTIVE: ${TLS_DIRECTIVE:-}
+      # Public hostname for the OmniRoute LLM gateway sidecar (needs its own
+      # DNS A record). Defaults to router.localhost, which keeps the extra
+      # Caddy site block inert on deployments that don't publish the router.
+      ROUTER_DOMAIN: ${ROUTER_DOMAIN:-router.localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

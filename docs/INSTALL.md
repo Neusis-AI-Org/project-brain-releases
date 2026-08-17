@@ -217,6 +217,20 @@ Precedence once a workload is saved:
 If you point the **graph builder** at a custom base URL (env or admin UI), its hostname must also be in `GRAPHIFY_EGRESS_ALLOWED_HOSTS` or the egress proxy blocks the call. See [Graphify sidecar egress](#graphify-sidecar-egress).
 :::
 
+## LLM Router sidecar (optional)
+
+The stack includes an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) LLM gateway sidecar that lets coding agents (neusis-code, Claude Code, …) route LLM traffic through your deployment using API keys minted from the **/admin/router** tab. It is an additive path — it does not change the LLM provider configuration above or any external LiteLLM deployment.
+
+To publish it, add a DNS A record for a router hostname and set in `.env`:
+
+```env
+ROUTER_DOMAIN=router.example.com
+ROUTER_PUBLIC_URL=https://router.example.com
+ROUTER_ADMIN_TOKEN=            # minted in the OmniRoute dashboard after first boot
+```
+
+Full setup, key minting, and agent-connection instructions: [docs/router.md](router.md).
+
 ## Connect integrations
 
 Super-admins manage integrations at:

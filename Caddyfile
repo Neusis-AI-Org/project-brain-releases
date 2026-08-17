@@ -34,11 +34,62 @@
         -Server
     }
 
-    reverse_proxy web:3000 {
-        # Pass real client IP through to Next.js. Auth.js and any rate
-        # limits read these.
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
+    # LLM router under a path prefix — no extra DNS record needed. Only the
+    # gateway's /v1 API surface is reachable (agents' base URL is
+    # https://APP_DOMAIN/router/v1); its dashboard/management API stays
+    # private. The router.ROUTER_DOMAIN site below remains as an optional
+    # subdomain alternative.
+    handle /router/v1/* {
+        uri strip_prefix /router
+        reverse_proxy omniroute:20128 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    handle {
+        reverse_proxy web:3000 {
+            # Pass real client IP through to Next.js. Auth.js and any rate
+            # limits read these.
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+}
+
+# OmniRoute LLM gateway (dashboard + OpenAI/Anthropic-compatible /v1 API).
+# Coding agents on developer machines point at https://<ROUTER_DOMAIN>/v1 with
+# a key minted from PB's /admin/router tab. Set ROUTER_DOMAIN in .env (e.g.
+# router.pbtest.neusis.ai) and add a DNS A record for it pointing at this
+# host; Caddy then auto-issues a cert. When ROUTER_DOMAIN is unset the block
+# falls back to router.localhost (internal cert, effectively unreachable),
+# so deployments that don't run the omniroute service are unaffected.
+{$ROUTER_DOMAIN:router.localhost} {
+    {$TLS_DIRECTIVE}
+
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    # Agents only ever need the OpenAI/Anthropic-compatible /v1 surface.
+    # Everything else (dashboard, management API) stays private: it removes
+    # the pre-onboarding unauthenticated window from the public host, and
+    # operators reach the console via an SSH tunnel when needed.
+    handle /v1/* {
+        reverse_proxy omniroute:20128 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+    handle {
+        respond 404
     }
 }

@@ -75,6 +75,9 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://brain:${POSTGRES_PASSWORD:-changeme}@postgres:5432/projectbrain
       REDIS_URL: redis://redis:6379
+      # Always use Compose DNS in-container. Host-run `pnpm dev` uses the
+      # loopback URL from .env instead.
+      ROUTER_INTERNAL_URL: http://omniroute:20128
       SCHEDULER_ENABLED: 'false'
       # Request-scoped service — needs headroom for concurrent requests.
       PG_POOL_MAX: ${PG_POOL_MAX_WEB:-25}
@@ -195,7 +198,13 @@ services:
     depends_on:
       graphify-egress-proxy: { condition: service_started }
     healthcheck:
-      test: ['CMD', 'python', '-c', 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen("http://localhost:8080/health",timeout=3).status==200 else 1)']
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen("http://localhost:8080/health",timeout=3).status==200 else 1)',
+        ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -232,10 +241,63 @@ services:
         max-size: 10m
         max-file: '5'
 
+  omniroute:
+    # OmniRoute LLM gateway sidecar (https://github.com/diegosouzapw/OmniRoute).
+    # Additive routing path for coding agents (neusis-code etc.) — PB's own LLM
+    # calls and the external litellm-proxy deployment are unaffected. PB's web
+    # app mints per-user gateway keys against its /api/v1/registered-keys API
+    # using ROUTER_ADMIN_TOKEN (created once in the OmniRoute dashboard after
+    # first boot — see docs/router.md). In prod, Caddy publishes it at
+    # https://${ROUTER_DOMAIN} so agents on developer machines can reach it.
+    image: diegosouzapw/omniroute:3.8.49
+    environment:
+      NODE_ENV: production
+      PORT: '20128'
+      HOSTNAME: 0.0.0.0
+      DATA_DIR: /app/data
+      # OmniRoute ships as a single-user local proxy: without this flag its
+      # OpenAI/Anthropic client endpoints accept anonymous traffic and even
+      # revoked keys (verified on 3.8.49). This deployment is multi-user and
+      # published through Caddy, so a valid registered key is mandatory.
+      REQUIRE_API_KEY: 'true'
+      # Lets PB's /admin/router fill a selected key into generated agent
+      # configs (management-scope only, audited PB-side). Deliberate
+      # tradeoff: keys are no longer strictly shown-once.
+      ALLOW_API_KEY_REVEAL: 'true'
+    volumes:
+      # SQLite DB, settings, and AES-256-GCM-encrypted provider credentials.
+      - omniroute_data:/app/data
+    ports:
+      # Loopback only — dev hits localhost:20128 directly; prod goes through
+      # Caddy on the compose network. Never expose 20128 publicly.
+      - '127.0.0.1:20128:20128'
+    # Upstream compose uses a long grace period so in-flight LLM streams can
+    # finish before shutdown.
+    stop_grace_period: 40s
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # healthcheck.mjs ships in the image workdir (upstream's own probe).
+      test: ['CMD', 'node', 'healthcheck.mjs']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
 volumes:
   postgres_data:
   redis_data:
   graphify_workspace:
+  omniroute_data:
 
 networks:
   graphify_internal:
