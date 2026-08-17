@@ -284,8 +284,16 @@ services:
       retries: 5
       start_period: 30s
     restart: unless-stopped
-    mem_limit: 1g
-    mem_reservation: 256m
+    # 1g was enough for API-key and OAuth connectors, but not for a reseller
+    # catalog: connecting OpenRouter (~900 models, a 1 MB catalog the gateway
+    # warms into memory at startup) drove RSS to the cap and the kernel
+    # OOM-killed the process in a loop — the container stayed "running" while
+    # every admin call timed out, which surfaces in the UI as "Router sidecar
+    # is unreachable". Verified on pbtest 2026-08-17: anon-rss 1002 MB at kill,
+    # 4 restarts. The host has ~2.6 GB free, and every other service on it runs
+    # an order of magnitude under its own cap.
+    mem_limit: 2g
+    mem_reservation: 512m
     cpus: 1.0
     logging:
       driver: json-file
