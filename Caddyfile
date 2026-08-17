@@ -39,6 +39,11 @@
     # https://APP_DOMAIN/router/v1); its dashboard/management API stays
     # private. The router.ROUTER_DOMAIN site below remains as an optional
     # subdomain alternative.
+    #
+    # Keep this matcher pinned to /router/v1/*. Project Brain serves its own
+    # member-facing page at /router, which must fall through to web:3000 below.
+    # Widening this to /router/* would proxy that page straight into the LLM
+    # gateway, breaking it and exposing the gateway on a path users visit.
     handle /router/v1/* {
         uri strip_prefix /router
         reverse_proxy omniroute:20128 {
