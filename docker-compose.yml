@@ -35,7 +35,13 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
-    mem_limit: 256m
+    # 256m entered an OOM crash-loop once BullMQ writer-job payloads (full file
+    # bodies of mirrored repos) pushed the AOF dataset past ~209MB — the server
+    # was killed during AOF load on every start; 768m then crash-looped the
+    # same way once AOF history + fragmentation put load-time RSS at the cap.
+    # Headroom for AOF load + save fork. Compact with BGREWRITEAOF if the AOF
+    # outgrows the dataset again.
+    mem_limit: 1280m
     mem_reservation: 64m
     cpus: 0.5
     logging:
@@ -119,6 +125,12 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
+      # Graphify commits hold the whole graphify-out file set (~60MB of
+      # strings) plus a 41MB graph.json stats parse in memory at once; V8's
+      # default heap cap (~half the container limit) OOM-crashed the process
+      # mid-commit. Pin the heap just under mem_limit (1536m) with headroom
+      # for buffers and the tsx supervisor.
+      NODE_OPTIONS: --max-old-space-size=1152
       DATABASE_URL: postgres://brain:${POSTGRES_PASSWORD:-changeme}@postgres:5432/projectbrain
       REDIS_URL: redis://redis:6379
       SCHEDULER_ENABLED: 'true'
@@ -126,6 +138,10 @@ services:
       PG_POOL_MAX: ${PG_POOL_MAX_WORKER:-5}
       GRAPHIFY_WORKSPACE_DIR: /workspace
       GRAPHIFY_SIDECAR_URL: http://graphify-sidecar:8080
+      # The worker resolves the graph builder's model endpoint and passes it to
+      # the sidecar, so like web it must override .env's host-loopback value
+      # with the compose service hostname — the sidecar dials this URL.
+      ROUTER_INTERNAL_URL: http://omniroute:20128
       # Required at worker startup (apps/worker/src/index.ts enforces). NOT
       # enforced here via ${VAR:?} because compose evaluates that at parse
       # time, which would break `docker compose config` and `docker compose
@@ -181,9 +197,33 @@ services:
       # container) and the worker refuses to start at all.
       GRAPHIFY_SIDECAR_TOKEN: ${GRAPHIFY_SIDECAR_TOKEN:-}
       GRAPHIFY_WORKSPACE_ROOT: /workspace
+      # Wall-clock budget for one `graphify extract`. The 30-minute default
+      # suits a docs-sized corpus; a mirrored source repo is one LLM call per
+      # file and needs far longer (astropy: ~1800 files at ~50/min). The
+      # worker's own ceiling is derived from this — keep them in step.
+      GRAPHIFY_TIMEOUT_S: ${GRAPHIFY_TIMEOUT_S:-1800}
+      # In-flight LLM calls; size to the provider's requests-per-minute
+      # budget. See MAX_CONCURRENCY in server.py.
+      GRAPHIFY_MAX_CONCURRENCY: ${GRAPHIFY_MAX_CONCURRENCY:-3}
+      # graphify forces its ollama backend serial (a single-GPU guard,
+      # graphifyy issue #798) unless this opt-in is set — but our "ollama"
+      # endpoint is OmniRoute, not a local GPU, so parallel chunks are safe.
+      # Without this, --max-concurrency is silently ignored.
+      GRAPHIFY_OLLAMA_PARALLEL: '1'
+      # Per-chunk input-token cap for semantic extraction (graphify
+      # --token-budget, upstream default 60000). See TOKEN_BUDGET in server.py.
+      GRAPHIFY_TOKEN_BUDGET: ${GRAPHIFY_TOKEN_BUDGET:-60000}
+      # "1" = AST-only extraction (--code-only): docs/papers/images skipped,
+      # zero LLM calls. For source-code corpora; doc-centric brains need 0.
+      GRAPHIFY_CODE_ONLY: ${GRAPHIFY_CODE_ONLY:-0}
       HTTP_PROXY: ${GRAPHIFY_EGRESS_PROXY:-http://graphify-egress-proxy:3128}
       HTTPS_PROXY: ${GRAPHIFY_EGRESS_PROXY:-http://graphify-egress-proxy:3128}
-      NO_PROXY: localhost,127.0.0.1,::1
+      # `omniroute` is exempt from the egress proxy: graph builds now reach
+      # their model through the router, and squid's SSRF hardening denies
+      # private-IP destinations, which is exactly what a sibling container is.
+      # The router itself does the outbound provider call from the default
+      # network, so egress is still centralized — just one hop later.
+      NO_PROXY: localhost,127.0.0.1,::1,omniroute
     volumes:
       - graphify_workspace:/workspace
     tmpfs:
@@ -210,7 +250,11 @@ services:
       retries: 5
       start_period: 30s
     restart: unless-stopped
-    mem_limit: 1g
+    # 1g OOM-killed the graphify process during graph merge/clustering on a
+    # ~48k-node corpus (django mirror): cgroup memory.peak sat exactly at the
+    # limit with oom_kill counts matching the failed runs. Sized for ~50k
+    # nodes with headroom; grows with corpus size.
+    mem_limit: 1536m
     mem_reservation: 256m
     cpus: 1.0
     logging:
@@ -232,9 +276,12 @@ services:
       - default
       - graphify_internal
     restart: unless-stopped
-    mem_limit: 128m
-    mem_reservation: 32m
-    cpus: 0.25
+    # 128m sat at ~89% in practice, because squid reserves cache_mem (256 MB
+    # by default) regardless of `cache deny all`. The entrypoint now pins
+    # cache_mem to 0; this keeps headroom for connection state on top.
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.5
     logging:
       driver: json-file
       options:
@@ -264,6 +311,17 @@ services:
       # configs (management-scope only, audited PB-side). Deliberate
       # tradeoff: keys are no longer strictly shown-once.
       ALLOW_API_KEY_REVEAL: 'true'
+      # OmniRoute admits only N "heavy" chat bodies (>256KB or >~32k est
+      # tokens) at once and 503s the rest (chat_admission_busy). The default
+      # of 1 silently serialized graphify's parallel semantic chunks — every
+      # ~80k-token chunk is a ~320KB body. Sized to GRAPHIFY_MAX_CONCURRENCY.
+      OMNIROUTE_CHAT_MAX_HEAVY_IN_FLIGHT: '10'
+    # graphify_internal as well as the default network: the graphify sidecar
+    # lives only on that internal network and now resolves its model through
+    # the router (see its NO_PROXY entry).
+    networks:
+      - default
+      - graphify_internal
     volumes:
       # SQLite DB, settings, and AES-256-GCM-encrypted provider credentials.
       - omniroute_data:/app/data

@@ -175,59 +175,51 @@ constructed and the button is not rendered.
 
 ## Configure the LLM provider
 
-Project Brain uses an LLM for two independent workloads: the **assistant chat** (in-app Q&A grounded on the knowledge graph) and the **graph builder** (the graphify sidecar that extracts the knowledge graph). Each is configured separately, through two surfaces.
+Project Brain uses an LLM for two independent workloads: the **assistant chat** (in-app Q&A grounded on the knowledge graph) and the **graph builder** (the graphify sidecar that extracts the knowledge graph). Both run through the router sidecar, so there is one place credentials live. The assistant model is platform-wide; the graph builder model is chosen per project.
 
-### Bootstrap with environment variables
+There are **no LLM environment variables**. Provider API keys are held by the router in its own encrypted store; Project Brain never has a copy. Nothing works until the router is onboarded — that is deliberate, so a deployment cannot quietly fall back to a directly-held provider key.
 
-The installer writes a starting provider and key to `.env`:
-
-```env
-LLM_PROVIDER=google            # google | anthropic | openai
-LLM_MODEL=gemini-3-flash-preview
-GOOGLE_GENERATIVE_AI_API_KEY=...
-# Optional custom / compatible endpoints:
-LLM_BASE_URL=                  # applies to both workloads
-GRAPH_BUILDER_BASE_URL=        # graph builder only (e.g. an internal LLM gateway)
-```
-
-Until a workload is configured in the admin UI, **both workloads run entirely from these env vars**. `GRAPH_BUILDER_BASE_URL` overrides `LLM_BASE_URL` for the graph builder only, so graphify's egress can be pinned to an internal proxy without changing the assistant chat endpoint.
-
-### Override per workload in the admin UI
-
-A super-admin can override the provider, model, endpoint, and key per workload on the **LLM Settings** page (super-admin only):
+### 1. Onboard the router and connect a provider
 
 ```text
-/admin/ai
+/admin/router
 ```
 
-For each of `assistant_chat` and `graph_builder` you can set:
+Select **Initialize router**, then connect a provider (Google AI Studio, OpenAI, Claude Code, ChatGPT (Codex), OpenRouter, Antigravity, and others). Connecting seeds a curated set of models for that connector, which you can adjust.
 
-- **Provider** — `google`, `anthropic`, or `openai`
-- **Model** — the model id for that provider
-- **Endpoint base URL** (optional) — for Azure OpenAI, LiteLLM, a private gateway, or any OpenAI/Anthropic/Google-compatible endpoint
-- **API key** — per provider, stored AES-256-GCM encrypted on `platform_ai_credentials` (see [Security model](security.md))
+Give each connection a **Name** if you like — useful once one provider has several keys.
 
-Precedence once a workload is saved:
-
-- **Provider and model** come from the saved row — `LLM_PROVIDER` / `LLM_MODEL` no longer apply to that workload.
-- **Base URL** falls back to the matching env value only when left blank in the form.
-- **API keys** are stored per provider (shared across workloads): a blank key field leaves any saved key in place, and the env key is used only when no key has ever been saved for that provider.
-
-:::warning
-If you point the **graph builder** at a custom base URL (env or admin UI), its hostname must also be in `GRAPHIFY_EGRESS_ALLOWED_HOSTS` or the egress proxy blocks the call. See [Graphify sidecar egress](#graphify-sidecar-egress).
+:::tip
+Adding **several keys for the same provider** is how you get rate-limit headroom. Each key becomes its own account, and the router spreads traffic across them and cools down whichever one returns a 429. The model you pick stays the same.
 :::
 
-## LLM Router sidecar (optional)
+### 2. Pick the models
 
-The stack includes an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) LLM gateway sidecar that lets coding agents (neusis-code, Claude Code, …) route LLM traffic through your deployment using API keys minted from the **/admin/router** tab. It is an additive path — it does not change the LLM provider configuration above or any external LiteLLM deployment.
+```text
+/admin/ai                       assistant chat (super admin)
+/projects/<slug>/settings       graph builder (any project member)
+```
 
-To publish it, add a DNS A record for a router hostname and set in `.env`:
+Choose a **connector** and a **model** in each place. The list is exactly the models curated on /admin/router; to use something else, add it there first. The assistant selection is stored on `platform_ai_settings`, the graph builder selection on each project's `project_graphify_settings` row; no credential is stored with them.
+
+Until the assistant has a model it returns a 503. A project without a graph builder model records its graph runs as `llm_not_configured` unless its scope is code only, which needs no model. See [docs/graphify.md](graphify.md#project-settings) for the rest of the project settings.
+
+:::note
+Upgrading from a release that configured LLM providers through `.env` and `platform_ai_credentials`? Those settings are gone: migration `0012` drops the credential table and `0013` clears the old model selections, whose provider names and model ids cannot be expressed as router ids. Re-connect the provider on /admin/router and re-pick the models on /admin/ai.
+:::
+
+## LLM Router sidecar
+
+The stack includes an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) LLM gateway sidecar. It carries both Project Brain's own LLM calls (above) and any coding agents (neusis-code, Claude Code, …) you connect with API keys minted from the **/admin/router** tab. It is independent of any external LiteLLM deployment.
+
+To let agents on other machines reach it, add a DNS A record for a router hostname and set in `.env`:
 
 ```env
 ROUTER_DOMAIN=router.example.com
 ROUTER_PUBLIC_URL=https://router.example.com
-ROUTER_ADMIN_TOKEN=            # minted in the OmniRoute dashboard after first boot
 ```
+
+Project Brain's own calls do not need this — they use the internal `ROUTER_INTERNAL_URL`.
 
 Full setup, key minting, and agent-connection instructions: [docs/router.md](router.md).
 
@@ -406,7 +398,9 @@ LOG_REDACT=header,xApiToken
 
 Knowledge graph builds run in `graphify-sidecar`, a non-root container that runs the Graphify CLI directly. The worker prepares the Git checkout and sends the sidecar only a prepared workspace path plus model settings; GitHub installation tokens stay in the worker.
 
-The sidecar is attached only to an internal Compose network. Its outbound LLM access goes through `graphify-egress-proxy`, which allows only configured destination hosts:
+The sidecar is attached only to an internal Compose network. It reaches its **model** through the router, which is joined to that same network and listed in the sidecar's `NO_PROXY` — it has to be, because squid denies private-IP destinations and a sibling container is exactly that. The router then makes the upstream provider call.
+
+So the allowlist below **does not bound graph-builder LLM traffic**; the connector list on /admin/router does, one hop later. It still governs every other outbound request the sidecar makes, and the proxy refuses to start on an empty list:
 
 ```env
 GRAPHIFY_SIDECAR_TOKEN=<32+ random chars>
@@ -417,12 +411,7 @@ GRAPHIFY_EGRESS_ALLOWED_HOSTS=generativelanguage.googleapis.com,api.openai.com,a
 
 `GRAPHIFY_EGRESS_ALLOWED_HOSTS` entries must be valid hostnames; the proxy validates each one at startup and exits if any entry is malformed. Subdomain matching uses a leading dot (e.g. `.acme.com`) — wildcards like `*.acme.com` are not supported by the proxy ACL.
 
-Enterprise deployments should replace the default allowlist with their approved LLM gateway or private model endpoint, for example:
-
-```env
-GRAPH_BUILDER_BASE_URL=https://llm.internal.acme.com/v1
-GRAPHIFY_EGRESS_ALLOWED_HOSTS=llm.internal.acme.com
-```
+Enterprise deployments that want to bound model traffic should do it on the router — connect only the approved gateway as a connector — rather than here.
 
 Verify the boundary after install:
 
@@ -451,20 +440,23 @@ Tuning knobs are read by the sidecar from its own service environment (set them 
 
 ```env
 GRAPHIFY_TIMEOUT_S=1800              # overall extraction budget (default 30 min)
-GRAPHIFY_CLUSTER_ONLY_TIMEOUT_S=180  # GRAPH_REPORT.md + graph.html regeneration
+GRAPHIFY_CLUSTER_ONLY_TIMEOUT_S=900  # community naming + GRAPH_REPORT.md + graph.html (one model call per community)
 GRAPHIFY_WIKI_TIMEOUT_S=120          # wiki export
 GRAPHIFY_MAX_OUTPUT_TOKENS=32768     # per-call output token cap
 ```
 
-### Forcing a full rebuild
+### Forcing a full or fresh rebuild
 
-The graph rebuilds incrementally by default. If the cache becomes stale or corrupt, force a full rebuild from the project UI: **hold Shift while clicking the Rebuild button**. This wipes `graphify-out/cache/` and re-extracts every file from scratch — at full LLM cost — so use it only for recovery, not routinely. The equivalent API call is:
+The graph rebuilds incrementally by default. If the cache becomes stale or corrupt, force a full rebuild from the project UI: **hold Shift while clicking the Rebuild button**. This wipes `graphify-out/cache/` and re-extracts every file from scratch, at full LLM cost, so use it only for recovery, not routinely. A forced rebuild only clears the extraction cache; the existing `graph.json` and `GRAPH_REPORT.md` stay in place until the new build overwrites them.
+
+A **fresh** rebuild goes one step further and wipes every graphify output first, so the graph is built from nothing. The project offers it automatically when a graph-shaping setting changed since the last build (the header shows "Settings changed since last build"). The API calls are:
 
 ```text
-POST /api/projects/<slug>/graph/rebuild?force=full
+POST /api/projects/<slug>/graph/rebuild?mode=full
+POST /api/projects/<slug>/graph/rebuild?mode=fresh
 ```
 
-A forced rebuild only clears the extraction cache; the existing `graph.json` and `GRAPH_REPORT.md` stay in place until the new build overwrites them.
+`?force=full` still works as an alias for `?mode=full`.
 
 ## Next steps
 

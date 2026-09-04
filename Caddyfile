@@ -44,6 +44,41 @@
     # member-facing page at /router, which must fall through to web:3000 below.
     # Widening this to /router/* would proxy that page straight into the LLM
     # gateway, breaking it and exposing the gateway on a path users visit.
+    # Model discovery is the one /v1 path Project Brain answers itself, so an
+    # agent sees the curated selection from /admin/router instead of the
+    # gateway's entire aggregated catalog (~1,200 entries with a reseller
+    # connector attached, 11-20s cold). Caddy matches the more specific path
+    # first, so this wins over the /router/v1/* handler below.
+    #
+    # Two consequences. The gateway's raw /v1/models is no longer reachable
+    # publicly — PB's own calls are unaffected, they go to omniroute:20128
+    # directly via ROUTER_INTERNAL_URL and never pass through Caddy. And if web
+    # is down, model discovery fails while chat keeps working.
+    handle /router/v1/models {
+        rewrite * /api/router/v1/models
+        reverse_proxy web:3000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # The key-authenticated config generator: one GET returns a developer's
+    # agent config with the current model list already in it, so a new provider
+    # never means re-pasting by hand.
+    handle /router/config/* {
+        # {uri} is the original request URI (a preceding strip_prefix does not
+        # change it), so rewrite straight to /api + the path as sent. The
+        # placeholder carries the query string too, which is what keeps
+        # ?name=<provider name in config> working.
+        rewrite * /api{uri}
+        reverse_proxy web:3000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
     handle /router/v1/* {
         uri strip_prefix /router
         reverse_proxy omniroute:20128 {
@@ -87,6 +122,26 @@
     # Everything else (dashboard, management API) stays private: it removes
     # the pre-onboarding unauthenticated window from the public host, and
     # operators reach the console via an SSH tunnel when needed.
+    # Curated model listing and the config generator are served by Project
+    # Brain; see the matching handlers on the app-domain site above for why.
+    handle /v1/models {
+        rewrite * /api/router/v1/models
+        reverse_proxy web:3000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    handle /config/* {
+        rewrite * /api/router{uri}
+        reverse_proxy web:3000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
     handle /v1/* {
         reverse_proxy omniroute:20128 {
             header_up X-Real-IP {remote_host}
