@@ -296,7 +296,7 @@ services:
     # using ROUTER_ADMIN_TOKEN (created once in the OmniRoute dashboard after
     # first boot — see docs/router.md). In prod, Caddy publishes it at
     # https://${ROUTER_DOMAIN} so agents on developer machines can reach it.
-    image: diegosouzapw/omniroute:3.8.49
+    image: diegosouzapw/omniroute:3.8.51
     environment:
       NODE_ENV: production
       PORT: '20128'
@@ -316,6 +316,14 @@ services:
       # of 1 silently serialized graphify's parallel semantic chunks — every
       # ~80k-token chunk is a ~320KB body. Sized to GRAPHIFY_MAX_CONCURRENCY.
       OMNIROUTE_CHAT_MAX_HEAVY_IN_FLIGHT: '10'
+      # Pre-seeds the management password on a fresh volume. Since 3.8.51 the
+      # router refuses a first password from a non-loopback caller (PB's web
+      # container) unless it carries a one-time token printed to this log, so
+      # PB onboards by adopting this password instead (it reads the same
+      # ROUTER_INITIAL_PASSWORD through env_file). Ignored once the router has
+      # a stored password, so it changes nothing on an initialized router.
+      # Empty means unset.
+      INITIAL_PASSWORD: ${ROUTER_INITIAL_PASSWORD:-}
     # graphify_internal as well as the default network: the graphify sidecar
     # lives only on that internal network and now resolves its model through
     # the router (see its NO_PROXY entry).

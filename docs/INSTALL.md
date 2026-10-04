@@ -185,7 +185,7 @@ There are **no LLM environment variables**. Provider API keys are held by the ro
 /admin/router
 ```
 
-Select **Initialize router**, then connect a provider (Google AI Studio, OpenAI, Claude Code, ChatGPT (Codex), OpenRouter, Antigravity, and others). Connecting seeds a curated set of models for that connector, which you can adjust.
+Select **Connect router** (it uses `ROUTER_INITIAL_PASSWORD` from `.env`, which `scripts/install.sh` generates; on a hand-written `.env`, set it to `openssl rand -hex 32` before the router's first start), then connect a provider (Google AI Studio, OpenAI, Claude Code, ChatGPT (Codex), OpenRouter, Antigravity, and others). Connecting seeds a curated set of models for that connector, which you can adjust.
 
 Give each connection a **Name** if you like — useful once one provider has several keys.
 

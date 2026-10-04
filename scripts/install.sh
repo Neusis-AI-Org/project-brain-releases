@@ -4,7 +4,8 @@
 # What it does, in order:
 #   1. Verifies docker + docker compose are available.
 #   2. Prompts for the deployment essentials (domain, email, IdP, LLM key).
-#   3. Generates fresh secrets (BRAIN_MASTER_KEY, AUTH_SECRET, INTERNAL_SERVICE_TOKEN, POSTGRES_PASSWORD).
+#   3. Generates fresh secrets (BRAIN_MASTER_KEY, AUTH_SECRET, INTERNAL_SERVICE_TOKEN, POSTGRES_PASSWORD,
+#      ROUTER_INITIAL_PASSWORD).
 #   4. Writes .env (refusing to clobber an existing one).
 #   5. Pulls every image at the requested IMAGE_TAG.
 #   6. Runs the one-shot migrate service.
@@ -93,6 +94,7 @@ AUTH_SECRET=$(openssl rand -base64 32)
 INTERNAL_SERVICE_TOKEN=$(openssl rand -hex 32)
 GRAPHIFY_SIDECAR_TOKEN=$(openssl rand -hex 32)
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
+ROUTER_INITIAL_PASSWORD=$(openssl rand -hex 32)
 
 # --- Write .env ---------------------------------------------------------
 bold "Writing .env"
@@ -127,6 +129,13 @@ KMS_PROVIDER=local
 # calls into the sidecar's HTTP API; the worker refuses to start without it.
 GRAPHIFY_SIDECAR_TOKEN=$GRAPHIFY_SIDECAR_TOKEN
 GRAPHIFY_EGRESS_ALLOWED_HOSTS=generativelanguage.googleapis.com,api.openai.com,api.anthropic.com
+
+# --- LLM router (OmniRoute sidecar) ---------------------------------------
+# Management password the router starts with on a fresh volume. Project Brain
+# uses it when you click "Connect router" on /admin/router. It stays the
+# router's admin password; protect it like BRAIN_MASTER_KEY. See
+# docs/router.md.
+ROUTER_INITIAL_PASSWORD=$ROUTER_INITIAL_PASSWORD
 
 # --- Database & queue ---------------------------------------------------
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
