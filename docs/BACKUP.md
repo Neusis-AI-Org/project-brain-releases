@@ -107,6 +107,26 @@ Replace:
 - `<timestamp>` with the snapshot timestamp
 - `project-brain_graphify_workspace` with the volume name from `docker volume ls`
 
+## Archive the router volume
+
+The router volume (`omniroute_data`) holds the router's database, settings, and encrypted provider credentials. No sidecar backs it up. Stop the router so its SQLite files are copied at rest:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml stop omniroute
+mkdir -p backups/omniroute && chmod 700 backups/omniroute
+
+docker run --rm \
+  -v project-brain_omniroute_data:/data:ro \
+  -v "$PWD/backups/omniroute:/backup" \
+  alpine sh -c 'umask 077 && tar czf /backup/omniroute_data-$(date +%F).tgz -C /data .'
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml start omniroute
+```
+
+Replace `project-brain_omniroute_data` with the volume name from `docker volume ls`.
+
+Keep the archive as private as the volume. Restoring it brings back OAuth refresh tokens as they were at backup time, so providers that rotate them on every refresh, such as Codex, may need to be signed in again.
+
 ## Run a restore drill
 
 :::tip
@@ -132,8 +152,9 @@ If your platform already handles backups, such as Velero, pgBackRest, or managed
 
 ## Not backed up
 
-| Data                      | Reason                                                                                                      |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Redis                     | BullMQ queues can be rebuilt. In-flight jobs may re-run.                                                    |
-| Caddy data volume         | Caddy can re-issue certificates on startup.                                                                 |
-| Customer Git repositories | Source code remains in the customer GitHub organization. Project Brain stores pointers and derived context. |
+| Data                             | Reason                                                                                                                                                                                                             |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Redis                            | BullMQ queues can be rebuilt. In-flight jobs may re-run.                                                                                                                                                           |
+| Caddy data volume                | Caddy can re-issue certificates on startup.                                                                                                                                                                        |
+| Customer Git repositories        | Source code remains in the customer GitHub organization. Project Brain stores pointers and derived context.                                                                                                        |
+| Router volume (`omniroute_data`) | Holds the router's settings and encrypted provider credentials. `omniroute-maint` keeps one database copy there, from before the last router upgrade. See [Archive the router volume](#archive-the-router-volume). |

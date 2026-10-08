@@ -296,7 +296,7 @@ services:
     # using ROUTER_ADMIN_TOKEN (created once in the OmniRoute dashboard after
     # first boot — see docs/router.md). In prod, Caddy publishes it at
     # https://${ROUTER_DOMAIN} so agents on developer machines can reach it.
-    image: diegosouzapw/omniroute:3.8.51
+    image: &omniroute-image diegosouzapw/omniroute:3.8.51
     environment:
       NODE_ENV: production
       PORT: '20128'
@@ -324,6 +324,15 @@ services:
       # a stored password, so it changes nothing on an initialized router.
       # Empty means unset.
       INITIAL_PASSWORD: ${ROUTER_INITIAL_PASSWORD:-}
+      # Log to stdout only (docker logs, capped below). The file logger keeps
+      # writing to a renamed file after its first rotation, and nothing caps
+      # that file. Only the exact string 'false' turns it off; omniroute-maint
+      # reads the same value.
+      APP_LOG_TO_FILE: &omniroute-app-log-to-file 'false'
+      # Lets OmniRoute's own shutdown run on SIGTERM (drain, truncate the SQLite
+      # WAL, close). Otherwise Next's handler exits first and the WAL keeps its
+      # largest size. Any value enables it; remove the key to disable.
+      NEXT_MANUAL_SIG_HANDLE: '1'
     # graphify_internal as well as the default network: the graphify sidecar
     # lives only on that internal network and now resolves its model through
     # the router (see its NO_PROXY entry).
@@ -361,6 +370,46 @@ services:
     mem_limit: 2g
     mem_reservation: 512m
     cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  omniroute-maint:
+    # Daily housekeeping on the router volume, see scripts/omniroute-maint/:
+    # keeps one db_backups/ copy (the database before the last router upgrade),
+    # trims two tables OmniRoute never prunes, and removes stale app log files.
+    # Acts only while the router reports ready. Same image as the router, so
+    # same SQLite build and user.
+    image: *omniroute-image
+    entrypoint: ['node', '/opt/omniroute-maint/omniroute-maint.mjs']
+    environment:
+      # UTC. Refused inside 01:45-02:30, around the router's 02:00 vacuum.
+      OMNIROUTE_MAINT_AT: '21:30'
+      LEDGER_KEEP_DAYS: '45'
+      COUNTER_KEEP_HOURS: '24'
+      APP_LOG_TO_FILE: *omniroute-app-log-to-file
+    volumes:
+      - omniroute_data:/app/data
+      # The directory rather than the file: if the script is missing only this
+      # service fails to start, and a replaced file applies from the next run.
+      - ./scripts/omniroute-maint:/opt/omniroute-maint:ro
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Replaces the image's router probe. Unhealthy once no run has succeeded
+      # for 26 hours; a run skipped because the router was not ready counts as
+      # failed.
+      test: ['CMD', 'node', '/opt/omniroute-maint/omniroute-maint.mjs', '--health']
+      interval: 5m
+      timeout: 10s
+      retries: 1
+      start_period: 1m
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 32m
+    cpus: 0.5
     logging:
       driver: json-file
       options:

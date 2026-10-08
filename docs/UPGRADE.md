@@ -50,6 +50,12 @@ The upgrade is healthy when `/api/health` returns `readiness=true`.
 
 If readiness fails, the script exits non-zero and prints inspection commands.
 
+The script does not restart the router (`omniroute`) or start new router services. To apply router changes from a release, such as the `omniroute-maint` service, run this once afterwards:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d omniroute omniroute-maint
+```
+
 ## Enable image signature verification
 
 Signature verification is recommended for production.

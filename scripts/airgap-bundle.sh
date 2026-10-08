@@ -4,7 +4,7 @@
 # Produces a single tarball containing:
 #   - All five images at the requested tag (web, worker, migrate, graphify sidecar/proxy)
 #   - docker-compose.yml + docker-compose.prod.yml + Caddyfile
-#   - install.sh, upgrade.sh, restore.sh
+#   - install.sh, upgrade.sh, restore.sh, omniroute-maint/
 #   - .env.example
 #   - SHA256SUMS + MANIFEST.txt
 #
@@ -55,8 +55,10 @@ docker save -o "$STAGE/images.tar" "${IMAGES[@]}"
 
 echo "==> [3/4] Staging compose + scripts + docs"
 cp docker-compose.yml docker-compose.prod.yml Caddyfile .env.example "$STAGE/"
-mkdir -p "$STAGE/scripts" "$STAGE/docker"
+mkdir -p "$STAGE/scripts/omniroute-maint" "$STAGE/docker"
 cp scripts/install.sh scripts/upgrade.sh scripts/restore.sh "$STAGE/scripts/"
+# docker-compose.yml mounts this directory into omniroute-maint.
+cp scripts/omniroute-maint/omniroute-maint.mjs "$STAGE/scripts/omniroute-maint/"
 chmod +x "$STAGE/scripts/"*.sh
 # Copy the docs the customer will actually need on the air-gapped host.
 for doc in INSTALL.md UPGRADE.md BACKUP.md; do
@@ -78,6 +80,7 @@ Contents:
   scripts/install.sh     interactive bootstrap
   scripts/upgrade.sh     upgrade flow
   scripts/restore.sh     restore from backup
+  scripts/omniroute-maint/ router volume housekeeping
 
 Air-gapped install:
   1. Transfer this directory to the target host.
