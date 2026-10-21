@@ -87,7 +87,7 @@ Expected downtime is 1-5 minutes for small instances and longer for large dumps.
 
 ## Restore the workspace volume
 
-The workspace contains shallow Git clones and graphify artifacts. Losing it does not lose product data, but the next graph rebuild starts cold. The worker scrubs the authenticated GitHub remote before each graphify run and verifies the scrub by re-reading `origin`; a run that cannot verify the scrub aborts before any data leaves the worker, so a snapshot of an idle workspace volume should not contain live GitHub installation tokens. (A snapshot taken mid-build can briefly include one, and installation tokens expire one hour after issuance regardless.)
+The workspace contains shallow Git clones and graphify artifacts. Losing it does not lose product data, but the next graph rebuild starts cold. The worker never writes the GitHub installation token into the workspace: git gets it from a credential helper for each clone or fetch. Before each graphify run the worker also resets the remote to the public URL and verifies it by re-reading `origin`, which clears a token an older release left there, so a snapshot of the workspace volume should not contain live GitHub installation tokens. (Installation tokens expire one hour after issuance regardless.)
 
 Restore it only if you want to avoid the cold-start cost.
 

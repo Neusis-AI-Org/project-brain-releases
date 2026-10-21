@@ -187,7 +187,7 @@ There are **no LLM environment variables**. Provider API keys are held by the ro
 
 Select **Connect router** (it uses `ROUTER_INITIAL_PASSWORD` from `.env`, which `scripts/install.sh` generates; on a hand-written `.env`, set it to `openssl rand -hex 32` before the router's first start), then connect a provider (Google AI Studio, OpenAI, Claude Code, ChatGPT (Codex), OpenRouter, Antigravity, and others). Connecting seeds a curated set of models for that connector, which you can adjust.
 
-Give each connection a **Name** if you like — useful once one provider has several keys.
+Give each connection an **Account name** if you like — useful once one provider has several keys.
 
 :::tip
 Adding **several keys for the same provider** is how you get rate-limit headroom. Each key becomes its own account, and the router spreads traffic across them and cools down whichever one returns a 429. The model you pick stays the same.
@@ -430,7 +430,7 @@ After every accepted change to a project's repo — and on a manual or scheduled
 
 | Artifact                                     | Produced by             | Purpose                                            |
 | -------------------------------------------- | ----------------------- | -------------------------------------------------- |
-| `graphify-out/graph.json`                    | `graphify extract`      | The extracted knowledge graph (nodes + edges)      |
+| `graphify-out/graph.json.gz`                 | `graphify extract`      | The extracted knowledge graph (nodes + edges), committed gzipped |
 | `graphify-out/GRAPH_REPORT.md`, `graph.html` | `graphify cluster-only` | Human-readable community report + interactive view |
 | `graphify-out/wiki/` (entry `wiki/index.md`) | `graphify export wiki`  | The assistant's primary grounding source           |
 
@@ -447,7 +447,7 @@ GRAPHIFY_MAX_OUTPUT_TOKENS=32768     # per-call output token cap
 
 ### Forcing a full or fresh rebuild
 
-The graph rebuilds incrementally by default. If the cache becomes stale or corrupt, force a full rebuild from the project UI: **hold Shift while clicking the Rebuild button**. This wipes `graphify-out/cache/` and re-extracts every file from scratch, at full LLM cost, so use it only for recovery, not routinely. A forced rebuild only clears the extraction cache; the existing `graph.json` and `GRAPH_REPORT.md` stay in place until the new build overwrites them.
+The graph rebuilds incrementally by default. If the cache becomes stale or corrupt, force a full rebuild from the project UI: **hold Shift while clicking the Rebuild button**. This wipes `graphify-out/cache/` and re-extracts every file from scratch, at full LLM cost, so use it only for recovery, not routinely. A forced rebuild only clears the extraction cache; the committed graph and report stay in the repo until the new build commits its own.
 
 A **fresh** rebuild goes one step further and wipes every graphify output first, so the graph is built from nothing. The project offers it automatically when a graph-shaping setting changed since the last build (the header shows "Settings changed since last build"). The API calls are:
 
