@@ -262,6 +262,8 @@ Project Brain deliberately does **not** request the `Administration` permission.
 
 > Each repo you connect must have a `main` branch with at least one commit — the simplest way is to tick **Add a README** when creating it on GitHub. Project Brain commits to `main` and can no longer auto-initialize an empty repo.
 
+To start the shared skills registry from a repo, set `SHARED_SKILLS_DEFAULT_REPO=owner/repo` in `.env` and install the App on that repo; the first visit to a Skills page then pulls it once. Otherwise a super admin enters the repo on the Skills page.
+
 **Switching org / re-registering**
 
 GitHub does not let you transfer App ownership. To move the App from your personal account to an org (or between orgs):
