@@ -221,8 +221,6 @@ ROUTER_PUBLIC_URL=https://router.example.com
 
 Project Brain's own calls do not need this — they use the internal `ROUTER_INTERNAL_URL`.
 
-Full setup, key minting, and agent-connection instructions: [docs/router.md](router.md).
-
 ## Connect integrations
 
 Super-admins manage integrations at:
